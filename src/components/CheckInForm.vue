@@ -17,24 +17,12 @@
         <hr>
         <h3>客户信息</h3>
         <div class="form-group">
-          <label for="guestName">客户姓名:</label>
-          <input type="text" id="guestName" v-model="guestName" required>
+          <label for="clientName">客户姓名:</label>
+          <input type="text" id="clientName" v-model="clientName" required>
         </div>
         <div class="form-group">
-          <label for="guestIdCard">身份证号:</label>
-          <input type="text" id="guestIdCard" v-model="guestIdCard" required pattern="\d{17}[\dX]">
-        </div>
-        <div class="form-group">
-          <label for="contactNumber">联系电话:</label>
-          <input type="tel" id="contactNumber" v-model="contactNumber" required>
-        </div>
-        <div class="form-group">
-          <label for="numberOfNights">入住天数:</label>
-          <input type="number" id="numberOfNights" v-model.number="numberOfNights" min="1" required>
-        </div>
-        <div class="form-group">
-          <label for="deposit">押金 (元):</label>
-          <input type="number" id="deposit" v-model.number="deposit" min="0" required>
+          <label for="clientID">身份证号:</label>
+          <input type="text" id="clientID" v-model="clientID" required pattern="\d{17}[\dX]">
         </div>
       </div>
 
@@ -50,16 +38,14 @@
 </template>
 
 <script>
+import api from '../../src/api'; // 假设有一个api.js文件处理API请求
 export default {
   name: 'CheckInForm',
   data() {
     return {
       roomNumber: '',
-      guestName: '',
-      guestIdCard: '',
-      contactNumber: '',
-      numberOfNights: 1,
-      deposit: 200, // 默认押金
+      clientName: '',
+      clientID: '',
       isLoading: false,
       feedbackMessage: '',
       feedbackType: '', // 'success' or 'error'
@@ -81,11 +67,8 @@ export default {
     isFormValid() {
       if (!this.canProceedToGuestInfo) return false;
       return (
-        this.guestName.trim() !== '' &&
-        this.guestIdCard.trim() !== '' && // 可以添加更复杂的身份证校验
-        this.contactNumber.trim() !== '' &&
-        this.numberOfNights >= 1 &&
-        this.deposit >= 0
+        this.clientName.trim() !== '' &&
+        this.clientID.trim() !== ''  // 可以添加更复杂的身份证校验
       );
     },
     roomStatusClass() {
@@ -102,15 +85,26 @@ export default {
       this.feedbackMessage = '';
       this.roomStatusInfo = null; // 重置
 
-      // 模拟API调用
-      await new Promise(resolve => setTimeout(resolve, 500));
-      const roomData = this.availableRooms[this.roomNumber.toUpperCase()];
-      if (roomData) {
-        this.roomStatusInfo = roomData;
-      } else {
-        this.roomStatusInfo = { status: '房间不存在' };
+      
+      try {
+        // 2. 调用api服务中的 getRoomStatus 方法，该方法会发送 GET /api/rooms/{roomId}/status 请求
+        const response = await api.getRoomStatus(this.roomNumber);
+    
+        const data = response.data; // 后端返回的原始数据
+
+        if (data.occupancyState === 0) {
+          this.roomStatusInfo = { status: '可用'};
+        } else if (data.occupancyState === 1) {
+          this.roomStatusInfo = { status: '已占用'};
+        } 
+      } catch (error) {
+        this.roomStatusInfo = { status: '查询失败' }; // 在UI上显示查询失败
+        // 从后端响应中提取错误信息，如果提取不到则显示通用错误提示
+        this.feedbackMessage = error.response?.data?.error || `房间 ${this.roomNumber} 不存在或网络错误。`;
+        this.feedbackType = 'error';
+      } finally {
+        this.isLoading = false; // 无论成功或失败，都结束加载状态
       }
-      this.isLoading = false;
     },
     async handleCheckIn() {
       if (!this.isFormValid) return;
@@ -120,42 +114,40 @@ export default {
       // 模拟API调用
       console.log('办理入住信息:', {
         roomNumber: this.roomNumber,
-        guestName: this.guestName,
-        guestIdCard: this.guestIdCard,
-        contactNumber: this.contactNumber,
-        numberOfNights: this.numberOfNights,
-        deposit: this.deposit,
+        clientName: this.clientName,
+        clientID: this.clientID,
       });
 
       await new Promise(resolve => setTimeout(resolve, 1000));
 
-      // 模拟成功或失败
-      const isSuccess = Math.random() > 0.2; // 80% 成功率
-      if (isSuccess) {
-        this.feedbackMessage = `房间 ${this.roomNumber} 办理入住成功！客户: ${this.guestName}`;
+
+      const checkInData = {
+        roomNumber: this.roomNumber,
+        clientName: this.clientName,
+        clientID: this.clientID,
+      };
+
+      try {
+        // 4. 调用api服务中的 checkIn 方法，发送 POST /api/check-in 请求
+        const response = await api.checkIn(checkInData);
+        
+        // 使用后端返回的成功信息来提示用户
+        this.feedbackMessage = response.data.message || `房间 ${this.roomNumber} 办理入住成功！`;
         this.feedbackType = 'success';
-        // 实际应用中，这里会更新房间状态为“已入住”
-        this.availableRooms[this.roomNumber.toUpperCase()] = {
-            status: '已入住',
-            occupant: this.guestName,
-            checkInTime: new Date().toISOString(),
-            // ... 其他入住信息
-        };
-        this.resetForm();
-      } else {
-        this.feedbackMessage = '办理入住失败，请检查信息或联系管理员。';
+        this.resetForm(); // 入住成功后，清空表单以便下次使用
+
+      } catch (error) {
+        // 使用后端返回的错误信息来提示用户
+        this.feedbackMessage = error.response?.data?.error || '办理入住失败，请检查信息或联系管理员。';
         this.feedbackType = 'error';
+      } finally {
+        this.isLoading = false;
       }
-      this.isLoading = false;
     },
     resetForm() {
       this.roomNumber = '';
-      this.guestName = '';
-      this.guestIdCard = '';
-      this.contactNumber = '';
-      this.numberOfNights = 1;
-      this.deposit = 200;
-      this.roomStatusInfo = null;
+      this.clientName = '';
+      this.clientID = '';
     }
   }
 };
