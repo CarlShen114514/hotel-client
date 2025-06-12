@@ -38,7 +38,7 @@
 </template>
 
 <script>
-import api from '../../src/api'; // 假设有一个api.js文件处理API请求
+import api from '../../src/api'; 
 export default {
   name: 'CheckInForm',
   data() {

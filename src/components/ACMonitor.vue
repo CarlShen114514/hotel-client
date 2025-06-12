@@ -49,11 +49,14 @@
           <p v-if="room.status !== 'off' && room.status !== 'error'">
             <strong>风速:</strong> {{ displayFanSpeed(room.fanSpeed) }}
           </p>
-           <p v-if="room.status === 'on'">
-            <strong>送风状态:</strong> {{ room.isSupplyingAir ? '送风中' : '已达目标，停风' }}
+
+          <p v-if="room.guestName">
+            <strong>当前客人:</strong> {{ room.guestName }}
           </p>
-          <p><strong>累计费用:</strong> {{ room.totalCost.toFixed(2) }}元</p>
-          <p v-if="room.guestName"><strong>当前客人:</strong> {{ room.guestName }}</p>
+          <p v-else>
+            <strong>房间状态:</strong> <span class="status-unoccupied">未入住</span>
+          </p>
+
           <p v-if="room.status === 'error' && room.errorMessage"><strong>故障信息:</strong> {{ room.errorMessage }}</p>
           <p class="last-updated">最后更新: {{ formatTime(room.lastUpdateTime) }}</p>
         </div>
@@ -70,17 +73,19 @@
 </template>
 
 <script>
+import api from '../../src/api';
+
 export default {
   name: 'ACMonitor',
   data() {
     return {
-      rooms: [], // 存储所有房间的空调状态数据
+      rooms: [],
       isLoading: false,
-      isActionLoading: {}, // 用于跟踪特定房间操作的加载状态 e.g. { roomId: 'shutdown' }
+      isActionLoading: {},
       filterRoomNumber: '',
-      filterStatus: '', // 'on', 'standby', 'off', 'error'
+      filterStatus: '',
       autoRefreshEnabled: true,
-      autoRefreshInterval: 10000, // 10秒自动刷新
+      autoRefreshInterval: 10000,
       autoRefreshTimer: null,
     };
   },
@@ -90,31 +95,82 @@ export default {
         const matchesRoomNumber = room.roomNumber.toLowerCase().includes(this.filterRoomNumber.toLowerCase());
         const matchesStatus = this.filterStatus ? room.status === this.filterStatus : true;
         return matchesRoomNumber && matchesStatus;
-      }).sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true })); // 按房间号排序
+      }).sort((a, b) => a.roomNumber.localeCompare(b.roomNumber, undefined, { numeric: true }));
     }
   },
   methods: {
     async fetchRoomsData() {
       this.isLoading = true;
-      // 模拟API调用
-      console.log("Fetching AC data from server...");
-      await new Promise(resolve => setTimeout(resolve, 800)); // 模拟网络延迟
-
-      // 模拟从后端获取的数据
-      const mockData = [
-        { id: 'r101', roomNumber: '101', status: 'on', currentMode: 'cool', targetTemperature: 22, currentTemperature: 22.5, fanSpeed: 'medium', isSupplyingAir: true, totalCost: 12.50, guestName: '张三', lastUpdateTime: Date.now() - 5000 },
-        { id: 'r102', roomNumber: '102', status: 'standby', currentMode: 'cool', targetTemperature: 24, currentTemperature: 23.8, fanSpeed: 'low', isSupplyingAir: false, totalCost: 8.75, guestName: '李四', lastUpdateTime: Date.now() - 10000 },
-        { id: 'r103', roomNumber: '103', status: 'off', currentMode: null, targetTemperature: null, currentTemperature: 26.1, fanSpeed: null, isSupplyingAir: false, totalCost: 0.00, guestName: null, lastUpdateTime: Date.now() - 3600000 },
-        { id: 'r201', roomNumber: '201', status: 'on', currentMode: 'heat', targetTemperature: 28, currentTemperature: 27.0, fanSpeed: 'high', isSupplyingAir: true, totalCost: 25.00, guestName: '王五', lastUpdateTime: Date.now() - 2000 },
-        { id: 'r202', roomNumber: '202', status: 'error', currentMode: 'cool', targetTemperature: 20, currentTemperature: 29.5, fanSpeed: 'medium', isSupplyingAir: false, totalCost: 5.50, guestName: '赵六', errorMessage: '传感器故障', lastUpdateTime: Date.now() - 60000 },
-        { id: 'r305A', roomNumber: '305A', status: 'standby', currentMode: 'heat', targetTemperature: 26, currentTemperature: 26.2, fanSpeed: 'medium', isSupplyingAir: false, totalCost: 3.20, guestName: '孙七', lastUpdateTime: Date.now() - 120000 },
-      ];
-
-      // 更新数据时，可以保留现有的一些状态或智能合并
-      this.rooms = mockData.map(room => ({ ...room, lastUpdateTime: room.lastUpdateTime || Date.now() }));
-      this.isLoading = false;
-      console.log("AC data refreshed.");
+      try {
+        const response = await api.getAllRoomsStatus();
+        // 使用 transformRoomData 方法来处理每个从后端接收到的房间对象
+        this.rooms = response.data.map(this.transformRoomData);
+        console.log("AC data refreshed from server.");
+      } catch (error) {
+        console.error("获取空调数据失败:", error);
+        alert('无法加载空调数据，请检查后端服务是否运行。');
+      } finally {
+        this.isLoading = false;
+      }
     },
+
+    /**
+     * @description 将后端 RoomInfo 对象转换为前端UI所需的格式
+     * @param {object} backendRoom - 从后端获取的 RoomInfo 对象
+     */
+    transformRoomData(backendRoom) {
+      // 根据你最新的定义，从 acState (Integer) 映射到 status (String)
+      const getStatus = (acState) => {
+        switch (acState) {
+          case 0: return 'off';       // 关机
+          case 1: return 'on';        // 运行中
+          case 2: return 'standby';   // 等待中/待机
+          case 3: return 'error';     // 假设3是故障
+          default: return 'off';      // 其他未知情况默认为关机
+        }
+      };
+      
+      // 根据温度判断空调模式 (因为 RoomInfo 中没有模式字段)
+      const getMode = (target, current) => {
+        if (target === null || current === null) return 'cool';
+        return current > target ? 'cool' : 'heat';
+      };
+
+      return {
+        // --- 核心字段映射 ---
+        id: String(backendRoom.roomId),
+        roomNumber: String(backendRoom.roomId),
+        status: getStatus(backendRoom.acState),
+        currentMode: getMode(backendRoom.targetTempera, backendRoom.currentTempera),
+        targetTemperature: backendRoom.targetTempera,
+        currentTemperature: backendRoom.currentTempera,
+        fanSpeed: backendRoom.currentSpeed?.toLowerCase() || 'low',
+        guestName: backendRoom.state === 0 ? null : backendRoom.clientName,
+
+        // --- 不再需要的或默认的字段 ---
+        errorMessage: null, // RoomInfo 中没有错误信息
+        lastUpdateTime: Date.now(),
+      };
+    },
+
+    async forceShutdown(roomNumber) {
+      if (this.isActionLoading[roomNumber]) return;
+      this.isActionLoading = { ...this.isActionLoading, [roomNumber]: 'shutdown' };
+      try {
+        await api.turnOffAC(roomNumber);
+        // 短暂延迟后刷新数据，给后端一点处理时间
+        setTimeout(() => this.fetchRoomsData(), 500);
+      } catch (error) {
+        console.error(`强制关机失败 (房间 ${roomNumber}):`, error);
+        alert(`房间 ${roomNumber} 强制关机失败: ${error.response?.data?.error || '未知错误'}`);
+      } finally {
+        const newActionLoading = { ...this.isActionLoading };
+        delete newActionLoading[roomNumber];
+        this.isActionLoading = newActionLoading;
+      }
+    },
+
+    // --- 以下方法保持不变 ---
     getStatusClass(status) {
       switch (status) {
         case 'on': return 'status-on';
@@ -150,10 +206,10 @@ export default {
       }
     },
     startAutoRefresh() {
-      this.stopAutoRefresh(); // Clear existing timer
+      this.stopAutoRefresh();
       if (this.autoRefreshEnabled && this.autoRefreshInterval > 0) {
         this.autoRefreshTimer = setInterval(() => {
-          if (!this.isLoading) { // 避免在前一个请求未完成时再次请求
+          if (!this.isLoading) {
              this.fetchRoomsData();
           }
         }, this.autoRefreshInterval);
@@ -167,38 +223,6 @@ export default {
         console.log("Auto-refresh stopped.");
       }
     },
-    async forceShutdown(roomId) {
-        if (this.isActionLoading[roomId]) return;
-        // this.$set(this.isActionLoading, roomId, 'shutdown'); // Vue 2
-        this.isActionLoading = { ...this.isActionLoading, [roomId]: 'shutdown' }; // Vue 3 reactivity
-
-        console.log(`Force shutting down AC for room ID: ${roomId}`);
-        // 模拟API调用
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        const roomIndex = this.rooms.findIndex(r => r.id === roomId);
-        if (roomIndex !== -1) {
-            // this.$set(this.rooms[roomIndex], 'status', 'off'); // Vue 2
-            // this.$set(this.rooms[roomIndex], 'isSupplyingAir', false);
-            // this.$set(this.rooms[roomIndex], 'lastUpdateTime', Date.now());
-            this.rooms[roomIndex] = {
-                ...this.rooms[roomIndex],
-                status: 'off',
-                isSupplyingAir: false,
-                lastUpdateTime: Date.now()
-            };
-             // 强制关机后，可能需要重置一些其他字段
-            this.rooms[roomIndex].currentMode = null;
-            this.rooms[roomIndex].targetTemperature = null;
-            this.rooms[roomIndex].fanSpeed = null;
-        }
-        // this.$delete(this.isActionLoading, roomId); // Vue 2
-        const newActionLoading = { ...this.isActionLoading }; // Vue 3
-        delete newActionLoading[roomId];
-        this.isActionLoading = newActionLoading;
-
-        console.log(`AC for room ID: ${roomId} shut down successfully.`);
-    }
   },
   mounted() {
     this.fetchRoomsData();
@@ -211,7 +235,6 @@ export default {
   }
 };
 </script>
-
 <style scoped>
 .aircon-monitor-container {
   padding: 20px;
