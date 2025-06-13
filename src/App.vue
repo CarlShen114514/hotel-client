@@ -6,6 +6,7 @@
         <router-link to="/aircon">空调控制面板</router-link>
         <router-link to="/frontdesk">前台操作</router-link>
         <router-link to="/monitor">空调监控</router-link>
+        <router-link to="/report-usage">调度报表</router-link>
       </nav>
     </header>
 

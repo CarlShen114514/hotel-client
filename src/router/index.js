@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import ACPanel from '../components/ACPanel.vue';
 import FrontDeskMenu from '../components/FrontDeskMenu.vue';
 import ACMonitor from '../components/ACMonitor.vue'; // 确保路径正确
+import Report from '../components/Report.vue';
 
 const routes = [
   {
@@ -23,6 +24,11 @@ const routes = [
     path: '/monitor',
     name: 'ACMonitor',
     component: ACMonitor
+  },
+  {
+    path: '/report-usage',
+    name: 'Report',
+    component: Report
   }
 ];
 
