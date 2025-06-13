@@ -1,6 +1,14 @@
 <template>
   <div class="ac-panel-container">
     <div class="ACPanel">
+      <!-- 房间信息显示 -->
+      <div class="room-info">
+        <h2>房间 {{ currentRoomNumber }} 空调控制面板</h2>
+        <div v-if="connectionStatus" class="connection-status" :class="connectionStatus">
+          {{ connectionStatusText }}
+        </div>
+      </div>
+
       <div class="display-area">
         <div class="temperature-display">
           <div class="current-temp">
@@ -20,44 +28,51 @@
       </div>
 
       <div class="controls-area">
-        <button @click="togglePower" :class="{ active: isOn }" class="power-btn">
-          {{ isOn ? '关机' : '开机' }}
+        <button @click="togglePower" :class="{ active: isOn }" class="power-btn" :disabled="isRequesting">
+          {{ isRequesting ? '请求中...' : (isOn ? '关机' : '开机') }}
         </button>
 
         <div v-if="isOn" class="active-controls">
           <div class="control-group">
             <label>模式:</label>
-            <button @click="setMode('cool')" :class="{ active: currentMode === 'cool' }">制冷</button>
-            <button @click="setMode('heat')" :class="{ active: currentMode === 'heat' }">制热</button>
+            <button @click="setMode('cool')" :class="{ active: currentMode === 'cool' }" :disabled="isRequesting">制冷</button>
+            <button @click="setMode('heat')" :class="{ active: currentMode === 'heat' }" :disabled="isRequesting">制热</button>
           </div>
 
           <div class="control-group">
             <label>温度调节:</label>
-            <button @click="changeTemperature('decrease')" :disabled="!canDecreaseTemp">-</button>
+            <button @click="changeTemperature('decrease')" :disabled="!canDecreaseTemp || isRequesting">-</button>
             <span>{{ targetTemperature }} °C</span>
-            <button @click="changeTemperature('increase')" :disabled="!canIncreaseTemp">+</button>
+            <button @click="changeTemperature('increase')" :disabled="!canIncreaseTemp || isRequesting">+</button>
           </div>
 
           <div class="control-group">
             <label>风速:</label>
-            <button @click="setFanSpeed('low')" :class="{ active: currentFanSpeed === 'low' }">低</button>
-            <button @click="setFanSpeed('medium')" :class="{ active: currentFanSpeed === 'medium' }">中</button>
-            <button @click="setFanSpeed('high')" :class="{ active: currentFanSpeed === 'high' }">高</button>
+            <button @click="setFanSpeed('low')" :class="{ active: currentFanSpeed === 'low' }" :disabled="isRequesting">低</button>
+            <button @click="setFanSpeed('medium')" :class="{ active: currentFanSpeed === 'medium' }" :disabled="isRequesting">中</button>
+            <button @click="setFanSpeed('high')" :class="{ active: currentFanSpeed === 'high' }" :disabled="isRequesting">高</button>
           </div>
         </div>
       </div>
-      
+
       <div v-if="logMessages.length" class="log-area">
         <strong>操作记录:</strong>
         <ul>
           <li v-for="(msg, index) in logMessages" :key="index">{{ msg }}</li>
         </ul>
       </div>
+
+      <!-- 错误信息显示 -->
+      <div v-if="errorMessage" class="error-message">
+        {{ errorMessage }}
+      </div>
     </div>
   </div>
 </template>
 
 <script>
+import api from '../api.js';
+
 const MODE_COOL = 'cool';
 const MODE_HEAT = 'heat';
 const FAN_LOW = 'low';
@@ -70,30 +85,35 @@ const TEMP_RANGES = {
   [MODE_HEAT]: { min: 25, max: 30 },
 };
 
-// 耗电标准 (度/分钟)
+// 移除原来的 FAN_SPEED_MAP，直接使用字符串
+
+// 耗电标准 (度/分钟) - 保持前端模拟逻辑
 const POWER_CONSUMPTION_RATE = {
-  [FAN_HIGH]: 1,    // 1度/1分钟
-  [FAN_MEDIUM]: 0.5, // 1度/2分钟
-  [FAN_LOW]: 1/3     // 1度/3分钟
+  [FAN_HIGH]: 1,
+  [FAN_MEDIUM]: 0.5,
+  [FAN_LOW]: 1 / 3
 };
-const COST_PER_KWH = 1; // 1元/度
+const COST_PER_KWH = 1;
 
-// 温度变化基准值 (中风模式下每分钟变化0.5度)
+// 温度变化基准值 - 保持前端模拟逻辑
 const TEMP_CHANGE_RATE_MEDIUM = 0.5;
-// 高风模式提高20%，低风模式降低20%
 const TEMP_CHANGE_RATES = {
-  [FAN_HIGH]: TEMP_CHANGE_RATE_MEDIUM * 1.2,   // 0.6度/分钟
-  [FAN_MEDIUM]: TEMP_CHANGE_RATE_MEDIUM,       // 0.5度/分钟
-  [FAN_LOW]: TEMP_CHANGE_RATE_MEDIUM * 0.8     // 0.4度/分钟
+  [FAN_HIGH]: TEMP_CHANGE_RATE_MEDIUM * 1.2,
+  [FAN_MEDIUM]: TEMP_CHANGE_RATE_MEDIUM,
+  [FAN_LOW]: TEMP_CHANGE_RATE_MEDIUM * 0.8
 };
 
-// 自然温度变化率 (停风后每分钟变化0.3度)
-const NATURAL_TEMP_CHANGE_RATE = 0.3 / 60; // 转换为每秒变化量
-// 温度重启阈值1度
+const NATURAL_TEMP_CHANGE_RATE = 0.3 / 60;
 const TEMP_RESTART_THRESHOLD = 1;
 
 export default {
   name: 'ACPanel',
+  props: {
+    roomNumber: {
+      type: String,
+      default: '101'
+    }
+  },
   data() {
     return {
       isOn: false,
@@ -110,7 +130,18 @@ export default {
       simulationIntervalId: null,
       costCalculationIntervalId: null,
       logMessages: [],
-      isFirstStart: true
+      isFirstStart: true,
+
+      // 后端通信相关
+      isRequesting: false,
+      errorMessage: '',
+      connectionStatus: 'connecting',
+      currentRoomNumber: '101',
+
+      // 新增：记录上次上报的温度
+      lastReportedTemperature: DEFAULT_TEMP,
+      // 新增：温度变化阈值（0.1度）
+      temperatureReportThreshold: 0.1,
     };
   },
   computed: {
@@ -138,45 +169,137 @@ export default {
     },
     shouldCharge() {
       if (!this.isOn || !this.isSupplyingAir) return false;
-      
       if (this.currentMode === MODE_COOL) {
         return this.roomTemperature > this.targetTemperature;
       } else {
         return this.roomTemperature < this.targetTemperature;
       }
+    },
+    connectionStatusText() {
+      switch (this.connectionStatus) {
+        case 'connecting':
+          return '连接中...';
+        case 'connected':
+          return '已连接';
+        case 'error':
+          return '连接失败';
+        default:
+          return '';
+      }
+    }
+  },
+  watch: {
+    roomNumber: {
+      immediate: true,
+      handler(newRoomNumber) {
+        if (newRoomNumber) {
+          this.currentRoomNumber = newRoomNumber;
+          this.initializeRoom();
+        }
+      }
     }
   },
   methods: {
+    async initializeRoom() {
+      this.connectionStatus = 'connecting';
+      this.errorMessage = '';
+      
+      try {
+        // 验证房间号是否为有效数字
+        const roomNum = parseInt(this.currentRoomNumber);
+        if (isNaN(roomNum)) {
+          throw new Error('无效的房间号');
+        }
+        
+        // 这里可以添加获取房间初始状态的逻辑
+        // const roomStatus = await api.getRoomStatus(roomNum);
+        
+        this.connectionStatus = 'connected';
+        this.logToServer(`连接到房间 ${this.currentRoomNumber}`);
+        
+        // 新增：初始化时上报当前温度
+        await this.reportCurrentTemperature(this.roomTemperature);
+      } catch (error) {
+        this.connectionStatus = 'error';
+        this.errorMessage = `连接房间 ${this.currentRoomNumber} 失败: ${error.message}`;
+        console.error('房间初始化失败:', error);
+      }
+    },
+
+    async sendBackendRequest(requestFunc, successMessage, errorPrefix) {
+      if (this.isRequesting) return false;
+      
+      this.isRequesting = true;
+      this.errorMessage = '';
+      
+      try {
+        await requestFunc();
+        if (successMessage) {
+          this.logToServer(successMessage);
+        }
+        return true;
+      } catch (error) {
+        const message = error.response?.data?.error || error.message || '请求失败';
+        this.errorMessage = `${errorPrefix}: ${message}`;
+        this.logToServer(`${errorPrefix}: ${message}`);
+        console.error(`${errorPrefix}:`, error);
+        return false;
+      } finally {
+        this.isRequesting = false;
+      }
+    },
+
     logToServer(message) {
       const timestamp = new Date().toLocaleTimeString();
       this.logMessages.unshift(`[${timestamp}] ${message}`);
       if (this.logMessages.length > 10) {
         this.logMessages.pop();
       }
-      console.log(`[TO SERVER] ${message}`);
+      console.log(`[TO SERVER] 房间${this.currentRoomNumber}: ${message}`);
     },
-    togglePower() {
-      this.isOn = !this.isOn;
-      if (this.isOn) {
-        this.currentMode = MODE_COOL;
-        this.targetTemperature = DEFAULT_TEMP;
-        this.currentFanSpeed = FAN_MEDIUM;
+
+    async togglePower() {
+      const willTurnOn = !this.isOn;
+      
+      const success = await this.sendBackendRequest(
+        async () => {
+          if (willTurnOn) {
+            await api.turnOnAC(this.currentRoomNumber);
+          } else {
+            await api.turnOffAC(this.currentRoomNumber);
+          }
+        },
+        null,
+        willTurnOn ? '开机失败' : '关机失败'
+      );
+
+      if (success) {
+        this.isOn = willTurnOn;
         
-        if (this.isFirstStart || !this.isSupplyingAir) {
-          this.isSupplyingAir = true;
-          this.logToServer(`开机。模式: ${this.displayMode}, 目标温度: ${this.targetTemperature}°C, 风速: ${this.displayFanSpeed}`);
+        if (this.isOn) {
+          this.currentMode = MODE_COOL;
+          this.targetTemperature = DEFAULT_TEMP;
+          this.currentFanSpeed = FAN_MEDIUM;
+
+          if (this.isFirstStart || !this.isSupplyingAir) {
+            this.isSupplyingAir = true;
+            this.logToServer(`开机。模式: ${this.displayMode}, 目标温度: ${this.targetTemperature}°C, 风速: ${this.displayFanSpeed}`);
+          }
+
+          this.isFirstStart = false;
+          this.startSimulations();
+        } else {
+          this.isSupplyingAir = false;
+          this.logToServer('关机。');
+          this.stopSimulations();
         }
-        
-        this.isFirstStart = false;
-        this.startSimulations();
-      } else {
-        this.isSupplyingAir = false;
-        this.logToServer('关机。');
-        this.stopSimulations();
       }
     },
-    setMode(mode) {
+
+    async setMode(mode) {
       if (!this.isOn || this.currentMode === mode) return;
+      
+      // 模式切换暂时只在前端处理，如果后端有对应接口可以添加
       this.currentMode = mode;
       if (this.targetTemperature < this.currentTempRange.min) {
         this.targetTemperature = this.currentTempRange.min;
@@ -186,13 +309,28 @@ export default {
       this.checkAndRestartAirSupply();
       this.logToServer(`切换模式: ${this.displayMode}, 目标温度: ${this.targetTemperature}°C`);
     },
-    setFanSpeed(speed) {
+
+    async setFanSpeed(speed) {
       if (!this.isOn || this.currentFanSpeed === speed) return;
-      this.currentFanSpeed = speed;
-      this.checkAndRestartAirSupply();
-      this.logToServer(`设置风速: ${this.displayFanSpeed}`);
+      
+      const success = await this.sendBackendRequest(
+        async () => {
+          // 直接传递字符串值给后端
+          console.log(`发送风速设置请求: roomNumber=${this.currentRoomNumber}, speed="${speed}"`);
+          await api.setAcSpeed(this.currentRoomNumber, speed);
+        },
+        null,
+        '设置风速失败'
+      );
+
+      if (success) {
+        this.currentFanSpeed = speed;
+        this.checkAndRestartAirSupply();
+        this.logToServer(`设置风速: ${this.displayFanSpeed}`);
+      }
     },
-    changeTemperature(direction) {
+
+    async changeTemperature(direction) {
       if (!this.isOn) return;
 
       const now = Date.now();
@@ -208,10 +346,24 @@ export default {
       }
       this.targetTemperature = tempTarget;
 
-      this.tempChangeTimeoutId = setTimeout(() => {
+      this.tempChangeTimeoutId = setTimeout(async () => {
         this.targetTemperature = Math.max(this.currentTempRange.min, Math.min(this.targetTemperature, this.currentTempRange.max));
-        this.checkAndRestartAirSupply();
-        this.logToServer(`调节温度: ${this.targetTemperature}°C`);
+        
+        const success = await this.sendBackendRequest(
+          async () => {
+            // 确保传递double类型的温度值
+            console.log(`发送温度设置请求: roomNumber=${this.currentRoomNumber}, temperature=${this.targetTemperature}`);
+            await api.setAcTargetTemperature(this.currentRoomNumber, this.targetTemperature);
+          },
+          null,
+          '设置温度失败'
+        );
+
+        if (success) {
+          this.checkAndRestartAirSupply();
+          this.logToServer(`调节温度: ${this.targetTemperature}°C`);
+        }
+        
         this.lastTempRequestTime = 0;
       }, 1000);
 
@@ -220,16 +372,30 @@ export default {
       }
       this.lastTempRequestTime = now;
     },
+
+    // 向后端上报当前温度
+    async reportCurrentTemperature(temperature) {
+      try {
+        console.log(`上报当前温度: roomNumber=${this.currentRoomNumber}, temperature=${temperature.toFixed(2)}`);
+        await api.setAcCurrentTemperature(this.currentRoomNumber, temperature);
+        this.lastReportedTemperature = temperature;
+      } catch (error) {
+        // 温度上报失败不影响主要功能，只记录错误
+        console.error('温度上报失败:', error);
+      }
+    },
+
+    // 以下方法保持原有的模拟逻辑不变
     startSimulations() {
       this.stopSimulations();
 
-      // 房间温度变化模拟 (每秒更新一次)
-      this.simulationIntervalId = setInterval(() => {
+      this.simulationIntervalId = setInterval(async () => {
+        // const oldTemperature = this.roomTemperature;
+
         if (this.isOn) {
           if (this.isSupplyingAir) {
-            // 正在送风 - 按设定速率改变温度
             const rate = TEMP_CHANGE_RATES[this.currentFanSpeed] / 60;
-            
+
             if (this.currentMode === MODE_COOL) {
               this.roomTemperature -= rate;
               if (this.roomTemperature <= this.targetTemperature) {
@@ -246,33 +412,28 @@ export default {
               }
             }
           } else {
-            // 停风状态 - 温度自然变化
             const naturalChange = NATURAL_TEMP_CHANGE_RATE;
-            
+
             if (this.currentMode === MODE_COOL) {
-              // 制冷模式下，停风后温度会自然上升，但不超过默认温度
               if (this.roomTemperature < DEFAULT_TEMP) {
                 this.roomTemperature = Math.min(
                   this.roomTemperature + naturalChange,
                   DEFAULT_TEMP
                 );
               }
-              
-              // 当温度超过目标温度1度时重新启动
+
               if (this.roomTemperature > this.targetTemperature + TEMP_RESTART_THRESHOLD) {
                 this.isSupplyingAir = true;
                 this.logToServer(`室温 (${this.roomTemperature.toFixed(1)}°C) 高于目标+${TEMP_RESTART_THRESHOLD}°C，重新启动制冷。`);
               }
             } else {
-              // 制热模式下，停风后温度会自然下降，但不低于默认温度
               if (this.roomTemperature > DEFAULT_TEMP) {
                 this.roomTemperature = Math.max(
                   this.roomTemperature - naturalChange,
                   DEFAULT_TEMP
                 );
               }
-              
-              // 当温度低于目标温度1度时重新启动
+
               if (this.roomTemperature < this.targetTemperature - TEMP_RESTART_THRESHOLD) {
                 this.isSupplyingAir = true;
                 this.logToServer(`室温 (${this.roomTemperature.toFixed(1)}°C) 低于目标-${TEMP_RESTART_THRESHOLD}°C，重新启动制热。`);
@@ -280,14 +441,14 @@ export default {
             }
           }
         } else {
-          // 关机状态 - 温度回归到默认温度
+          // 空调关闭时的自然温度变化
           const diffToDefault = DEFAULT_TEMP - this.roomTemperature;
           if (Math.abs(diffToDefault) > 0.05) {
             const change = Math.sign(diffToDefault) * NATURAL_TEMP_CHANGE_RATE;
             this.roomTemperature += change;
-            
-            if ((diffToDefault > 0 && this.roomTemperature > DEFAULT_TEMP) || 
-                (diffToDefault < 0 && this.roomTemperature < DEFAULT_TEMP)) {
+
+            if ((diffToDefault > 0 && this.roomTemperature > DEFAULT_TEMP) ||
+              (diffToDefault < 0 && this.roomTemperature < DEFAULT_TEMP)) {
               this.roomTemperature = DEFAULT_TEMP;
             }
           } else {
@@ -295,11 +456,17 @@ export default {
           }
         }
 
-        // 确保室温在合理范围内
+        // 限制温度范围
         this.roomTemperature = Math.max(10, Math.min(this.roomTemperature, 40));
+
+        // 新增：检查温度是否有显著变化，如果有则上报给后端
+        const temperatureChange = Math.abs(this.roomTemperature - this.lastReportedTemperature);
+        if (temperatureChange >= this.temperatureReportThreshold) {
+          // 异步上报温度，不阻塞模拟逻辑
+          this.reportCurrentTemperature(this.roomTemperature);
+        }
       }, 1000);
 
-      // 费用计算模拟 (每秒结算一次)
       this.costCalculationIntervalId = setInterval(() => {
         if (this.shouldCharge) {
           const consumptionPerSecond = POWER_CONSUMPTION_RATE[this.currentFanSpeed] / 60;
@@ -307,31 +474,35 @@ export default {
         }
       }, 1000);
     },
+
     stopSimulations() {
       if (this.simulationIntervalId) clearInterval(this.simulationIntervalId);
       if (this.costCalculationIntervalId) clearInterval(this.costCalculationIntervalId);
       this.simulationIntervalId = null;
       this.costCalculationIntervalId = null;
     },
+
     checkAndRestartAirSupply() {
       if (this.isOn && !this.isSupplyingAir) {
         if ((this.currentMode === MODE_COOL && this.roomTemperature > this.targetTemperature) ||
-            (this.currentMode === MODE_HEAT && this.roomTemperature < this.targetTemperature)) {
+          (this.currentMode === MODE_HEAT && this.roomTemperature < this.targetTemperature)) {
           this.isSupplyingAir = true;
           this.logToServer(`设置改变，重新开始送风以达到目标 ${this.targetTemperature}°C。`);
         }
       } else if (this.isOn && this.isSupplyingAir) {
         if ((this.currentMode === MODE_COOL && this.roomTemperature <= this.targetTemperature) ||
-            (this.currentMode === MODE_HEAT && this.roomTemperature >= this.targetTemperature)) {
+          (this.currentMode === MODE_HEAT && this.roomTemperature >= this.targetTemperature)) {
           this.isSupplyingAir = false;
           this.logToServer(`设置改变，房间已达目标，停止送风。`);
         }
       }
     }
   },
+
   mounted() {
-    // 初始时空调关闭，室温为默认值
+    // 组件挂载时初始化房间
   },
+
   beforeUnmount() {
     this.stopSimulations();
     if (this.tempChangeTimeoutId) clearTimeout(this.tempChangeTimeoutId);
@@ -355,7 +526,40 @@ export default {
   padding: 20px;
   font-family: Arial, sans-serif;
   background-color: #f9f9f9;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.room-info {
+  text-align: center;
+  margin-bottom: 15px;
+}
+
+.room-info h2 {
+  color: #333;
+  margin: 0 0 10px 0;
+  font-size: 1.3em;
+}
+
+.connection-status {
+  padding: 5px 10px;
+  border-radius: 15px;
+  font-size: 0.8em;
+  font-weight: bold;
+}
+
+.connection-status.connecting {
+  background-color: #fff3cd;
+  color: #856404;
+}
+
+.connection-status.connected {
+  background-color: #d4edda;
+  color: #155724;
+}
+
+.connection-status.error {
+  background-color: #f8d7da;
+  color: #721c24;
 }
 
 .display-area {
@@ -372,7 +576,9 @@ export default {
   margin-bottom: 10px;
   font-size: 1.2em;
 }
-.current-temp strong, .target-temp strong {
+
+.current-temp strong,
+.target-temp strong {
   font-size: 1.5em;
   color: #333;
 }
@@ -407,7 +613,7 @@ export default {
   transition: background-color 0.2s;
 }
 
-.controls-area button:hover {
+.controls-area button:hover:not(:disabled) {
   background-color: #3a8a3d;
 }
 
@@ -416,6 +622,7 @@ export default {
   color: white;
   border-color: #4CAF50;
 }
+
 .controls-area button:disabled {
   background-color: #eee;
   color: #aaa;
@@ -435,6 +642,7 @@ export default {
   transition: background-color 0.2s;
   text-align: center;
 }
+
 .power-btn.active {
   background-color: #2ecc71;
   border-color: #2ecc71;
@@ -446,16 +654,19 @@ export default {
   align-items: center;
   justify-content: space-between;
 }
+
 .active-controls .control-group label {
   margin-right: 10px;
   font-weight: bold;
   flex-shrink: 0;
 }
+
 .active-controls .control-group span {
   font-size: 1.1em;
   min-width: 50px;
   text-align: center;
 }
+
 .log-area {
   margin-top: 20px;
   padding: 10px;
@@ -466,16 +677,29 @@ export default {
   overflow-y: auto;
   background-color: #fdfdfd;
 }
+
 .log-area ul {
   list-style-type: none;
   padding: 0;
   margin: 0;
 }
+
 .log-area li {
   padding: 2px 0;
   border-bottom: 1px solid #eee;
 }
+
 .log-area li:last-child {
   border-bottom: none;
+}
+
+.error-message {
+  background-color: #f8d7da;
+  color: #721c24;
+  border: 1px solid #f5c6cb;
+  border-radius: 4px;
+  padding: 10px;
+  margin-top: 15px;
+  font-size: 0.9em;
 }
 </style>

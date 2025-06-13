@@ -12,9 +12,10 @@ const routes = [
     redirect: '/aircon'
   },
   {
-    path: '/aircon',
-    name: 'ACPanel',
-    component: ACPanel
+    path: '/aircon/:roomNumber',
+    name: 'ACPanelRoom',
+    component: ACPanel,
+    props: true // 将路由参数作为props传递给组件
   },
   {
     path: '/frontdesk',

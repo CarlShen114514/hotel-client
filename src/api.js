@@ -49,9 +49,13 @@ export default {
     // 修正：后端需要路径变量和请求体
     return apiClient.post(`/ac/${roomNumber}/set-speed`, { speed });
   },
-  setAcTemperature(roomNumber, temperature) {
+  setAcTargetTemperature(roomNumber, temperature) {
     // 修正：后端需要路径变量和请求体
     return apiClient.post(`/ac/${roomNumber}/set-temperature`, { temperature });
+  },
+  setAcCurrentTemperature(roomNumber, currentTemperature) {
+    // 修正：后端需要路径变量和请求体
+    return apiClient.put(`/rooms/${roomNumber}/current-temperature`, { currentTemperature });
   },
 
   // 报表相关API
