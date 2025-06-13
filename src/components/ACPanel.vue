@@ -85,8 +85,6 @@ const TEMP_RANGES = {
   [MODE_HEAT]: { min: 25, max: 30 },
 };
 
-// 移除原来的 FAN_SPEED_MAP，直接使用字符串
-
 // 耗电标准 (度/分钟) - 保持前端模拟逻辑
 const POWER_CONSUMPTION_RATE = {
   [FAN_HIGH]: 1,
@@ -96,14 +94,15 @@ const POWER_CONSUMPTION_RATE = {
 const COST_PER_KWH = 1;
 
 // 温度变化基准值 - 保持前端模拟逻辑
-const TEMP_CHANGE_RATE_MEDIUM = 0.5;
+const DEBUG_FACTOR = 10;
+const TEMP_CHANGE_RATE_MEDIUM = 0.5 * DEBUG_FACTOR;
 const TEMP_CHANGE_RATES = {
   [FAN_HIGH]: TEMP_CHANGE_RATE_MEDIUM * 1.2,
   [FAN_MEDIUM]: TEMP_CHANGE_RATE_MEDIUM,
   [FAN_LOW]: TEMP_CHANGE_RATE_MEDIUM * 0.8
 };
 
-const NATURAL_TEMP_CHANGE_RATE = 0.3 / 60;
+const NATURAL_TEMP_CHANGE_RATE = 0.3 * DEBUG_FACTOR / 60;
 const TEMP_RESTART_THRESHOLD = 1;
 
 export default {
@@ -205,19 +204,15 @@ export default {
       this.errorMessage = '';
       
       try {
-        // 验证房间号是否为有效数字
         const roomNum = parseInt(this.currentRoomNumber);
         if (isNaN(roomNum)) {
           throw new Error('无效的房间号');
         }
         
-        // 这里可以添加获取房间初始状态的逻辑
-        // const roomStatus = await api.getRoomStatus(roomNum);
-        
         this.connectionStatus = 'connected';
         this.logToServer(`连接到房间 ${this.currentRoomNumber}`);
         
-        // 新增：初始化时上报当前温度
+        // 初始化时上报当前温度
         await this.reportCurrentTemperature(this.roomTemperature);
       } catch (error) {
         this.connectionStatus = 'error';
@@ -246,6 +241,25 @@ export default {
         return false;
       } finally {
         this.isRequesting = false;
+      }
+    },
+
+    // 新增：向后端通知送风状态变化
+    async notifyAirSupplyChange(isSupplying, reason) {
+      try {
+        if (isSupplying) {
+          console.log(`通知后端开始送风: roomNumber=${this.currentRoomNumber}, 原因: ${reason}`);
+          await api.turnOnAC(this.currentRoomNumber);
+          this.logToServer(`[后端通知] 开始送风 - ${reason}`);
+        } else {
+          console.log(`通知后端停止送风: roomNumber=${this.currentRoomNumber}, 原因: ${reason}`);
+          await api.turnOffAC(this.currentRoomNumber);
+          this.logToServer(`[后端通知] 停止送风 - ${reason}`);
+        }
+      } catch (error) {
+        // 送风状态通知失败不影响主要功能，只记录错误
+        console.error('送风状态通知失败:', error);
+        this.logToServer(`[后端通知失败] ${isSupplying ? '开始' : '停止'}送风通知失败: ${error.message}`);
       }
     },
 
@@ -299,7 +313,6 @@ export default {
     async setMode(mode) {
       if (!this.isOn || this.currentMode === mode) return;
       
-      // 模式切换暂时只在前端处理，如果后端有对应接口可以添加
       this.currentMode = mode;
       if (this.targetTemperature < this.currentTempRange.min) {
         this.targetTemperature = this.currentTempRange.min;
@@ -315,7 +328,6 @@ export default {
       
       const success = await this.sendBackendRequest(
         async () => {
-          // 直接传递字符串值给后端
           console.log(`发送风速设置请求: roomNumber=${this.currentRoomNumber}, speed="${speed}"`);
           await api.setAcSpeed(this.currentRoomNumber, speed);
         },
@@ -351,7 +363,6 @@ export default {
         
         const success = await this.sendBackendRequest(
           async () => {
-            // 确保传递double类型的温度值
             console.log(`发送温度设置请求: roomNumber=${this.currentRoomNumber}, temperature=${this.targetTemperature}`);
             await api.setAcTargetTemperature(this.currentRoomNumber, this.targetTemperature);
           },
@@ -373,25 +384,20 @@ export default {
       this.lastTempRequestTime = now;
     },
 
-    // 向后端上报当前温度
     async reportCurrentTemperature(temperature) {
       try {
         console.log(`上报当前温度: roomNumber=${this.currentRoomNumber}, temperature=${temperature.toFixed(2)}`);
         await api.setAcCurrentTemperature(this.currentRoomNumber, temperature);
         this.lastReportedTemperature = temperature;
       } catch (error) {
-        // 温度上报失败不影响主要功能，只记录错误
         console.error('温度上报失败:', error);
       }
     },
 
-    // 以下方法保持原有的模拟逻辑不变
     startSimulations() {
       this.stopSimulations();
 
       this.simulationIntervalId = setInterval(async () => {
-        // const oldTemperature = this.roomTemperature;
-
         if (this.isOn) {
           if (this.isSupplyingAir) {
             const rate = TEMP_CHANGE_RATES[this.currentFanSpeed] / 60;
@@ -400,15 +406,27 @@ export default {
               this.roomTemperature -= rate;
               if (this.roomTemperature <= this.targetTemperature) {
                 this.roomTemperature = this.targetTemperature;
+                const wasSupplying = this.isSupplyingAir;
                 this.isSupplyingAir = false;
                 this.logToServer(`房间达到目标温度 ${this.targetTemperature}°C，停止送风。`);
+                
+                // 新增：通知后端停止送风
+                if (wasSupplying) {
+                  await this.notifyAirSupplyChange(false, `达到目标温度 ${this.targetTemperature}°C`);
+                }
               }
             } else {
               this.roomTemperature += rate;
               if (this.roomTemperature >= this.targetTemperature) {
                 this.roomTemperature = this.targetTemperature;
+                const wasSupplying = this.isSupplyingAir;
                 this.isSupplyingAir = false;
                 this.logToServer(`房间达到目标温度 ${this.targetTemperature}°C，停止送风。`);
+                
+                // 新增：通知后端停止送风
+                if (wasSupplying) {
+                  await this.notifyAirSupplyChange(false, `达到目标温度 ${this.targetTemperature}°C`);
+                }
               }
             }
           } else {
@@ -423,8 +441,14 @@ export default {
               }
 
               if (this.roomTemperature > this.targetTemperature + TEMP_RESTART_THRESHOLD) {
+                const wasSupplying = this.isSupplyingAir;
                 this.isSupplyingAir = true;
                 this.logToServer(`室温 (${this.roomTemperature.toFixed(1)}°C) 高于目标+${TEMP_RESTART_THRESHOLD}°C，重新启动制冷。`);
+                
+                // 新增：通知后端开始送风
+                if (!wasSupplying) {
+                  await this.notifyAirSupplyChange(true, `室温过高，重新启动制冷`);
+                }
               }
             } else {
               if (this.roomTemperature > DEFAULT_TEMP) {
@@ -435,8 +459,14 @@ export default {
               }
 
               if (this.roomTemperature < this.targetTemperature - TEMP_RESTART_THRESHOLD) {
+                const wasSupplying = this.isSupplyingAir;
                 this.isSupplyingAir = true;
                 this.logToServer(`室温 (${this.roomTemperature.toFixed(1)}°C) 低于目标-${TEMP_RESTART_THRESHOLD}°C，重新启动制热。`);
+                
+                // 新增：通知后端开始送风
+                if (!wasSupplying) {
+                  await this.notifyAirSupplyChange(true, `室温过低，重新启动制热`);
+                }
               }
             }
           }
@@ -459,10 +489,9 @@ export default {
         // 限制温度范围
         this.roomTemperature = Math.max(10, Math.min(this.roomTemperature, 40));
 
-        // 新增：检查温度是否有显著变化，如果有则上报给后端
+        // 检查温度是否有显著变化，如果有则上报给后端
         const temperatureChange = Math.abs(this.roomTemperature - this.lastReportedTemperature);
         if (temperatureChange >= this.temperatureReportThreshold) {
-          // 异步上报温度，不阻塞模拟逻辑
           this.reportCurrentTemperature(this.roomTemperature);
         }
       }, 1000);
@@ -482,18 +511,30 @@ export default {
       this.costCalculationIntervalId = null;
     },
 
-    checkAndRestartAirSupply() {
+    async checkAndRestartAirSupply() {
       if (this.isOn && !this.isSupplyingAir) {
         if ((this.currentMode === MODE_COOL && this.roomTemperature > this.targetTemperature) ||
           (this.currentMode === MODE_HEAT && this.roomTemperature < this.targetTemperature)) {
+          const wasSupplying = this.isSupplyingAir;
           this.isSupplyingAir = true;
           this.logToServer(`设置改变，重新开始送风以达到目标 ${this.targetTemperature}°C。`);
+          
+          // 新增：通知后端开始送风
+          if (!wasSupplying) {
+            await this.notifyAirSupplyChange(true, `设置改变，重新开始送风`);
+          }
         }
       } else if (this.isOn && this.isSupplyingAir) {
         if ((this.currentMode === MODE_COOL && this.roomTemperature <= this.targetTemperature) ||
           (this.currentMode === MODE_HEAT && this.roomTemperature >= this.targetTemperature)) {
+          const wasSupplying = this.isSupplyingAir;
           this.isSupplyingAir = false;
           this.logToServer(`设置改变，房间已达目标，停止送风。`);
+          
+          // 新增：通知后端停止送风
+          if (wasSupplying) {
+            await this.notifyAirSupplyChange(false, `设置改变，房间已达目标`);
+          }
         }
       }
     }
