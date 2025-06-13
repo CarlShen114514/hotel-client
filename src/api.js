@@ -52,7 +52,16 @@ export default {
   setAcTemperature(roomNumber, temperature) {
     // 修正：后端需要路径变量和请求体
     return apiClient.post(`/ac/${roomNumber}/set-temperature`, { temperature });
-  }
+  },
 
+  // 报表相关API
+  getUsageReport(startTime, endTime) {
+    return apiClient.get('/reports/usage', {
+      params: { startTime, endTime }
+    });
+  },
   
+  getRoomReport(roomId) {
+    return apiClient.get(`/reports/rooms/${roomId}`);
+  }
 };

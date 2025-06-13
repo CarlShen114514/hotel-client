@@ -3,6 +3,7 @@ import ACPanel from '../components/ACPanel.vue';
 import FrontDeskMenu from '../components/FrontDeskMenu.vue';
 import ACMonitor from '../components/ACMonitor.vue'; // 确保路径正确
 import Report from '../components/Report.vue';
+import DataOverview from '../components/DataOverview.vue';
 
 const routes = [
   {
@@ -29,6 +30,11 @@ const routes = [
     path: '/report-usage',
     name: 'Report',
     component: Report
+  },
+  {
+    path: '/overview',
+    name: 'DataOverview',
+    component: DataOverview
   }
 ];
 
