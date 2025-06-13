@@ -46,7 +46,8 @@
           </div>
         </div>
       </div>
-       <div v-if="logMessages.length" class="log-area">
+      
+      <div v-if="logMessages.length" class="log-area">
         <strong>操作记录:</strong>
         <ul>
           <li v-for="(msg, index) in logMessages" :key="index">{{ msg }}</li>
@@ -69,23 +70,27 @@ const TEMP_RANGES = {
   [MODE_HEAT]: { min: 25, max: 30 },
 };
 
-// 耗电: 度/分钟
+// 耗电标准 (度/分钟)
 const POWER_CONSUMPTION_RATE = {
-  [FAN_HIGH]: 1 / 1,    // 1度/1分钟
-  [FAN_MEDIUM]: 1 / 2, // 1度/2分钟
-  [FAN_LOW]: 1 / 3,    // 1度/3分钟
+  [FAN_HIGH]: 1,    // 1度/1分钟
+  [FAN_MEDIUM]: 0.5, // 1度/2分钟
+  [FAN_LOW]: 1/3     // 1度/3分钟
 };
 const COST_PER_KWH = 1; // 1元/度
 
-// 温度变化: 度/分钟
-const TEMP_CHANGE_RATE_MEDIUM = 0.5; // 中风基础变化率
+// 温度变化基准值 (中风模式下每分钟变化0.5度)
+const TEMP_CHANGE_RATE_MEDIUM = 0.5;
+// 高风模式提高20%，低风模式降低20%
 const TEMP_CHANGE_RATES = {
-    [FAN_HIGH]: TEMP_CHANGE_RATE_MEDIUM * 1.2,
-    [FAN_MEDIUM]: TEMP_CHANGE_RATE_MEDIUM,
-    [FAN_LOW]: TEMP_CHANGE_RATE_MEDIUM * 0.8,
+  [FAN_HIGH]: TEMP_CHANGE_RATE_MEDIUM * 1.2,   // 0.6度/分钟
+  [FAN_MEDIUM]: TEMP_CHANGE_RATE_MEDIUM,       // 0.5度/分钟
+  [FAN_LOW]: TEMP_CHANGE_RATE_MEDIUM * 0.8     // 0.4度/分钟
 };
-const TEMP_CHANGE_OFF_RATE = 0.5; // 关机时温度变化率
-const TEMP_RESTART_THRESHOLD = 1; // 超过目标1度重启
+
+// 自然温度变化率 (停风后每分钟变化0.3度)
+const NATURAL_TEMP_CHANGE_RATE = 0.3 / 60; // 转换为每秒变化量
+// 温度重启阈值1度
+const TEMP_RESTART_THRESHOLD = 1;
 
 export default {
   name: 'ACPanel',
@@ -95,16 +100,17 @@ export default {
       currentMode: MODE_COOL,
       targetTemperature: DEFAULT_TEMP,
       currentFanSpeed: FAN_MEDIUM,
-      roomTemperature: DEFAULT_TEMP, // 初始房间温度等于默认温度
+      roomTemperature: DEFAULT_TEMP,
       cost: 0,
 
       // 内部状态
-      isSupplyingAir: false, // 是否正在送风 (达到目标后会停止)
+      isSupplyingAir: false,
       lastTempRequestTime: 0,
       tempChangeTimeoutId: null,
       simulationIntervalId: null,
       costCalculationIntervalId: null,
       logMessages: [],
+      isFirstStart: true
     };
   },
   computed: {
@@ -129,40 +135,49 @@ export default {
     canIncreaseTemp() {
       if (!this.isOn) return false;
       return this.targetTemperature < this.currentTempRange.max;
+    },
+    shouldCharge() {
+      if (!this.isOn || !this.isSupplyingAir) return false;
+      
+      if (this.currentMode === MODE_COOL) {
+        return this.roomTemperature > this.targetTemperature;
+      } else {
+        return this.roomTemperature < this.targetTemperature;
+      }
     }
   },
   methods: {
     logToServer(message) {
       const timestamp = new Date().toLocaleTimeString();
       this.logMessages.unshift(`[${timestamp}] ${message}`);
-      if (this.logMessages.length > 10) { // Keep log short
+      if (this.logMessages.length > 10) {
         this.logMessages.pop();
       }
-      console.log(`[TO SERVER] ${message}`); // 模拟发送到服务器
+      console.log(`[TO SERVER] ${message}`);
     },
     togglePower() {
       this.isOn = !this.isOn;
       if (this.isOn) {
-        // 开机，恢复/设置默认状态
-        this.currentMode = MODE_COOL; // 或者可以保存上次的状态
+        this.currentMode = MODE_COOL;
         this.targetTemperature = DEFAULT_TEMP;
         this.currentFanSpeed = FAN_MEDIUM;
-        this.isSupplyingAir = true; // 开机默认送风
-        this.logToServer(`开机。模式: ${this.displayMode}, 目标温度: ${this.targetTemperature}°C, 风速: ${this.displayFanSpeed}`);
+        
+        if (this.isFirstStart || !this.isSupplyingAir) {
+          this.isSupplyingAir = true;
+          this.logToServer(`开机。模式: ${this.displayMode}, 目标温度: ${this.targetTemperature}°C, 风速: ${this.displayFanSpeed}`);
+        }
+        
+        this.isFirstStart = false;
         this.startSimulations();
       } else {
-        // 关机
         this.isSupplyingAir = false;
         this.logToServer('关机。');
         this.stopSimulations();
-        // 关机后室温会逐渐恢复到初始温度（这里简化为向DEFAULT_TEMP变化）
-        // 成本计算也应停止
       }
     },
     setMode(mode) {
       if (!this.isOn || this.currentMode === mode) return;
       this.currentMode = mode;
-      // 切换模式时，如果目标温度超出新模式范围，则调整
       if (this.targetTemperature < this.currentTempRange.min) {
         this.targetTemperature = this.currentTempRange.min;
       } else if (this.targetTemperature > this.currentTempRange.max) {
@@ -174,7 +189,7 @@ export default {
     setFanSpeed(speed) {
       if (!this.isOn || this.currentFanSpeed === speed) return;
       this.currentFanSpeed = speed;
-      this.checkAndRestartAirSupply(); // 风速改变可能需要重新开始送风
+      this.checkAndRestartAirSupply();
       this.logToServer(`设置风速: ${this.displayFanSpeed}`);
     },
     changeTemperature(direction) {
@@ -185,92 +200,112 @@ export default {
         clearTimeout(this.tempChangeTimeoutId);
       }
 
-      // 更新目标温度的逻辑，先临时更新以反映到界面，实际发送以最后一次为准
       let tempTarget = this.targetTemperature;
       if (direction === 'increase' && this.canIncreaseTemp) {
         tempTarget++;
       } else if (direction === 'decrease' && this.canDecreaseTemp) {
         tempTarget--;
       }
-      this.targetTemperature = tempTarget; // 立即更新UI显示
+      this.targetTemperature = tempTarget;
 
-      // 防抖：1秒内连续操作，只发送最后一次
       this.tempChangeTimeoutId = setTimeout(() => {
-        // 确保最终的 targetTemperature 在范围内
         this.targetTemperature = Math.max(this.currentTempRange.min, Math.min(this.targetTemperature, this.currentTempRange.max));
         this.checkAndRestartAirSupply();
         this.logToServer(`调节温度: ${this.targetTemperature}°C`);
-        this.lastTempRequestTime = 0; // 重置以便下次立即发送
-      }, 1000); // 1秒延迟发送
+        this.lastTempRequestTime = 0;
+      }, 1000);
 
-       if (now - this.lastTempRequestTime < 1000) {
-         // 如果小于1秒，只更新UI，不立即发送（上面timeout会处理）
-         this.logToServer(`温度指令 (${this.targetTemperature}°C) 已缓存，等待1秒后发送最终值`);
-       } else {
-         // 大于1秒，这次操作算是新的开始（虽然也会被上面的timeout覆盖，但逻辑上是这样）
-         // 实际发送由上面的timeout统一处理
-       }
-       this.lastTempRequestTime = now;
+      if (now - this.lastTempRequestTime < 1000) {
+        this.logToServer(`温度指令 (${this.targetTemperature}°C) 已缓存，等待1秒后发送最终值`);
+      }
+      this.lastTempRequestTime = now;
     },
-
     startSimulations() {
-      this.stopSimulations(); // Clear existing intervals
+      this.stopSimulations();
 
-      // 房间温度变化模拟 (每5秒更新一次，实际传感器可能是实时的)
+      // 房间温度变化模拟 (每秒更新一次)
       this.simulationIntervalId = setInterval(() => {
         if (this.isOn) {
           if (this.isSupplyingAir) {
-            const rate = TEMP_CHANGE_RATES[this.currentFanSpeed];
-            if (this.currentMode === MODE_COOL && this.roomTemperature > this.targetTemperature) {
-              this.roomTemperature -= rate / (60 / 5); // 每5秒变化
+            // 正在送风 - 按设定速率改变温度
+            const rate = TEMP_CHANGE_RATES[this.currentFanSpeed] / 60;
+            
+            if (this.currentMode === MODE_COOL) {
+              this.roomTemperature -= rate;
               if (this.roomTemperature <= this.targetTemperature) {
                 this.roomTemperature = this.targetTemperature;
                 this.isSupplyingAir = false;
                 this.logToServer(`房间达到目标温度 ${this.targetTemperature}°C，停止送风。`);
               }
-            } else if (this.currentMode === MODE_HEAT && this.roomTemperature < this.targetTemperature) {
-              this.roomTemperature += rate / (60 / 5);
+            } else {
+              this.roomTemperature += rate;
               if (this.roomTemperature >= this.targetTemperature) {
                 this.roomTemperature = this.targetTemperature;
                 this.isSupplyingAir = false;
                 this.logToServer(`房间达到目标温度 ${this.targetTemperature}°C，停止送风。`);
               }
-            } else if ( (this.currentMode === MODE_COOL && this.roomTemperature < this.targetTemperature) ||
-                        (this.currentMode === MODE_HEAT && this.roomTemperature > this.targetTemperature) ) {
-                // 目标温度改变，但房间温度在错误的一侧，或者已经相等，不需要主动改变，而是等待自然变化或送风
-                // 如果已经相等，上面逻辑会停止送风
             }
-          } else { // 不送风时，检查是否需要重启
-            if (this.currentMode === MODE_COOL && this.roomTemperature > this.targetTemperature + TEMP_RESTART_THRESHOLD) {
-              this.isSupplyingAir = true;
-              this.logToServer(`室温 (${this.roomTemperature.toFixed(1)}°C) 高于目标+${TEMP_RESTART_THRESHOLD}°C，重新启动制冷。`);
-            } else if (this.currentMode === MODE_HEAT && this.roomTemperature < this.targetTemperature - TEMP_RESTART_THRESHOLD) {
-              this.isSupplyingAir = true;
-              this.logToServer(`室温 (${this.roomTemperature.toFixed(1)}°C) 低于目标-${TEMP_RESTART_THRESHOLD}°C，重新启动制热。`);
-            }
-          }
-        } else { // 关机状态
-          const diffToDefault = DEFAULT_TEMP - this.roomTemperature;
-          if (Math.abs(diffToDefault) > 0.1) { // 避免浮点数精度问题
-             const change = TEMP_CHANGE_OFF_RATE / (60 / 5);
-             this.roomTemperature += Math.sign(diffToDefault) * Math.min(Math.abs(diffToDefault), change);
           } else {
-            this.roomTemperature = DEFAULT_TEMP; // 稳定在初始温度
+            // 停风状态 - 温度自然变化
+            const naturalChange = NATURAL_TEMP_CHANGE_RATE;
+            
+            if (this.currentMode === MODE_COOL) {
+              // 制冷模式下，停风后温度会自然上升，但不超过默认温度
+              if (this.roomTemperature < DEFAULT_TEMP) {
+                this.roomTemperature = Math.min(
+                  this.roomTemperature + naturalChange,
+                  DEFAULT_TEMP
+                );
+              }
+              
+              // 当温度超过目标温度1度时重新启动
+              if (this.roomTemperature > this.targetTemperature + TEMP_RESTART_THRESHOLD) {
+                this.isSupplyingAir = true;
+                this.logToServer(`室温 (${this.roomTemperature.toFixed(1)}°C) 高于目标+${TEMP_RESTART_THRESHOLD}°C，重新启动制冷。`);
+              }
+            } else {
+              // 制热模式下，停风后温度会自然下降，但不低于默认温度
+              if (this.roomTemperature > DEFAULT_TEMP) {
+                this.roomTemperature = Math.max(
+                  this.roomTemperature - naturalChange,
+                  DEFAULT_TEMP
+                );
+              }
+              
+              // 当温度低于目标温度1度时重新启动
+              if (this.roomTemperature < this.targetTemperature - TEMP_RESTART_THRESHOLD) {
+                this.isSupplyingAir = true;
+                this.logToServer(`室温 (${this.roomTemperature.toFixed(1)}°C) 低于目标-${TEMP_RESTART_THRESHOLD}°C，重新启动制热。`);
+              }
+            }
+          }
+        } else {
+          // 关机状态 - 温度回归到默认温度
+          const diffToDefault = DEFAULT_TEMP - this.roomTemperature;
+          if (Math.abs(diffToDefault) > 0.05) {
+            const change = Math.sign(diffToDefault) * NATURAL_TEMP_CHANGE_RATE;
+            this.roomTemperature += change;
+            
+            if ((diffToDefault > 0 && this.roomTemperature > DEFAULT_TEMP) || 
+                (diffToDefault < 0 && this.roomTemperature < DEFAULT_TEMP)) {
+              this.roomTemperature = DEFAULT_TEMP;
+            }
+          } else {
+            this.roomTemperature = DEFAULT_TEMP;
           }
         }
-        // 确保室温不会极端
+
+        // 确保室温在合理范围内
         this.roomTemperature = Math.max(10, Math.min(this.roomTemperature, 40));
+      }, 1000);
 
-      }, 5000); // 每5秒模拟一次温度变化和空调逻辑
-
-      // 费用计算模拟 (每分钟结算一次，简化模型)
-      // 实际中应该是服务端根据送风时长和费率计算
+      // 费用计算模拟 (每秒结算一次)
       this.costCalculationIntervalId = setInterval(() => {
-        if (this.isOn && this.isSupplyingAir) {
-          const consumptionRate = POWER_CONSUMPTION_RATE[this.currentFanSpeed]; // 度/分钟
-          this.cost += consumptionRate * COST_PER_KWH; // 每分钟增加的费用
+        if (this.shouldCharge) {
+          const consumptionPerSecond = POWER_CONSUMPTION_RATE[this.currentFanSpeed] / 60;
+          this.cost += consumptionPerSecond * COST_PER_KWH;
         }
-      }, 60000); // 每分钟计算一次费用
+      }, 1000);
     },
     stopSimulations() {
       if (this.simulationIntervalId) clearInterval(this.simulationIntervalId);
@@ -279,27 +314,23 @@ export default {
       this.costCalculationIntervalId = null;
     },
     checkAndRestartAirSupply() {
-        // 当目标温度、模式或风速改变时，如果当前未送风，但条件允许，则开始送风
-        if (this.isOn && !this.isSupplyingAir) {
-            if ( (this.currentMode === MODE_COOL && this.roomTemperature > this.targetTemperature) ||
-                 (this.currentMode === MODE_HEAT && this.roomTemperature < this.targetTemperature) ) {
-                this.isSupplyingAir = true;
-                this.logToServer(`设置改变，重新开始送风以达到目标 ${this.targetTemperature}°C。`);
-            }
-        } else if (this.isOn && this.isSupplyingAir) {
-            // 如果正在送风，但目标已达到或超过，则应停止
-             if ( (this.currentMode === MODE_COOL && this.roomTemperature <= this.targetTemperature) ||
-                 (this.currentMode === MODE_HEAT && this.roomTemperature >= this.targetTemperature) ) {
-                this.isSupplyingAir = false;
-                this.logToServer(`设置改变，房间已达目标，停止送风。`);
-            }
+      if (this.isOn && !this.isSupplyingAir) {
+        if ((this.currentMode === MODE_COOL && this.roomTemperature > this.targetTemperature) ||
+            (this.currentMode === MODE_HEAT && this.roomTemperature < this.targetTemperature)) {
+          this.isSupplyingAir = true;
+          this.logToServer(`设置改变，重新开始送风以达到目标 ${this.targetTemperature}°C。`);
         }
+      } else if (this.isOn && this.isSupplyingAir) {
+        if ((this.currentMode === MODE_COOL && this.roomTemperature <= this.targetTemperature) ||
+            (this.currentMode === MODE_HEAT && this.roomTemperature >= this.targetTemperature)) {
+          this.isSupplyingAir = false;
+          this.logToServer(`设置改变，房间已达目标，停止送风。`);
+        }
+      }
     }
   },
   mounted() {
     // 初始时空调关闭，室温为默认值
-    // 如果需要一打开页面就模拟，可以在这里调用 this.startSimulations()
-    // 但根据面板逻辑，应该是用户点击开机后才开始模拟
   },
   beforeUnmount() {
     this.stopSimulations();
@@ -313,7 +344,7 @@ export default {
   display: flex;
   justify-content: center;
   align-items: center;
-  min-height: 80vh; /* 占据大部分视口高度 */
+  min-height: 80vh;
   width: 100%;
 }
 
@@ -363,7 +394,7 @@ export default {
 .controls-area {
   display: flex;
   flex-direction: column;
-  align-items: stretch; /* 让子元素拉伸到容器宽度 */
+  align-items: stretch;
 }
 
 .controls-area button {
@@ -402,13 +433,12 @@ export default {
   box-sizing: border-box;
   cursor: pointer;
   transition: background-color 0.2s;
-  text-align: center; /* 确保文字居中 */
+  text-align: center;
 }
 .power-btn.active {
   background-color: #2ecc71;
   border-color: #2ecc71;
 }
-
 
 .active-controls .control-group {
   margin-bottom: 15px;
