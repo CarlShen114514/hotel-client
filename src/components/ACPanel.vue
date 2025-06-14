@@ -105,7 +105,7 @@ const POWER_CONSUMPTION_RATE = {
 const COST_PER_KWH = 1;
 
 // 温度变化基准值 - 保持前端模拟逻辑
-const DEBUG_FACTOR = 10;
+const DEBUG_FACTOR = 1;
 const TEMP_CHANGE_RATE_MEDIUM = 0.5 * DEBUG_FACTOR;
 const TEMP_CHANGE_RATES = {
   [FAN_HIGH]: TEMP_CHANGE_RATE_MEDIUM * 1.2,
@@ -837,7 +837,7 @@ export default {
               this.logToServer(`⏳ 送风请求已发出，等待调度器分配 (${this.airSupplyRequestCooldown / 1000}秒冷却)`);
             }
           }
-        }, 1000); // 等待3秒让调度器处理
+        }, 10000); // 等待3秒让调度器处理
         
       } catch (error) {
         console.error('请求送风服务失败:', error);
