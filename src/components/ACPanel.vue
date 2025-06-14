@@ -94,7 +94,7 @@ const POWER_CONSUMPTION_RATE = {
 const COST_PER_KWH = 1;
 
 // 温度变化基准值 - 保持前端模拟逻辑
-const DEBUG_FACTOR = 10;
+const DEBUG_FACTOR = 5;
 const TEMP_CHANGE_RATE_MEDIUM = 0.5 * DEBUG_FACTOR;
 const TEMP_CHANGE_RATES = {
   [FAN_HIGH]: TEMP_CHANGE_RATE_MEDIUM * 1.2,
