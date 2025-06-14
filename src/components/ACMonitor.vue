@@ -85,7 +85,7 @@ export default {
       filterRoomNumber: '',
       filterStatus: '',
       autoRefreshEnabled: true,
-      autoRefreshInterval: 10000,
+      autoRefreshInterval: 1000,
       autoRefreshTimer: null,
     };
   },
