@@ -4,12 +4,13 @@ import FrontDeskMenu from '../components/FrontDeskMenu.vue';
 import ACMonitor from '../components/ACMonitor.vue'; // 确保路径正确
 import Report from '../components/Report.vue';
 import DataOverview from '../components/DataOverview.vue';
+import WelcomePage from '@/components/WelcomePage.vue';
 
 const routes = [
   {
     path: '/',
     name: 'Home',
-    redirect: '/aircon'
+    redirect: '/overview'
   },
   {
     path: '/aircon/:roomNumber',
@@ -21,6 +22,11 @@ const routes = [
     path: '/frontdesk',
     name: 'FrontDesk',
     component: FrontDeskMenu
+  },
+  {
+    path: '/welcome',
+    name: 'Welcome',
+    component: WelcomePage
   },
   {
     path: '/monitor',

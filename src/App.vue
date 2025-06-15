@@ -3,10 +3,9 @@
     <header class="app-header">
       <img alt="Hotel Logo" src="./assets/bupt.png" class="logo" v-if="showLogo"> <!-- 假设你有logo.png -->
       <nav class="main-nav">
-        <router-link to="/aircon">空调控制面板</router-link>
+        <router-link to="/overview">数据总览</router-link>
         <router-link to="/frontdesk">前台操作</router-link>
         <router-link to="/monitor">空调监控</router-link>
-        <router-link to="/overview">数据总览</router-link>
         <router-link to="/report-usage">调度报表</router-link>
       </nav>
     </header>

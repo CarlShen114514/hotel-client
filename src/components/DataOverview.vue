@@ -5,7 +5,7 @@
     <div class="charts-container">
       <!-- 左侧饼图 -->
       <div class="chart-section">
-        <h2>今日空调花费分布</h2>
+        <h2>近24h空调花费分布</h2>
         <div class="chart-wrapper">
           <canvas ref="pieChart" id="pieChart"></canvas>
         </div>
@@ -38,7 +38,7 @@
       <h3>数据摘要</h3>
       <div class="summary-grid">
         <div class="summary-item">
-          <span class="label">今日总消费：</span>
+          <span class="label">近24h总消费：</span>
           <span class="value">￥{{ todayTotalCost.toFixed(2) }}</span>
         </div>
         <div class="summary-item">

@@ -22,9 +22,7 @@
           <div>模式: <strong>{{ displayMode }}</strong></div>
           <div>风速: <strong>{{ isOn ? displayFanSpeed : '关闭' }}</strong></div>
         </div>
-        <div class="cost-display">
-          费用: <strong>{{ cost.toFixed(2) }}</strong> 元
-        </div>
+        
       </div>
 
       <div class="controls-area">
@@ -577,6 +575,7 @@ export default {
 
           this.isFirstStart = false;
           // 开机时启动模拟
+          this.currentFanSpeed = FAN_MEDIUM;
           this.startSimulations();
         } else {
           // 关机时停止送风，但不停止温度模拟
